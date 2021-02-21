@@ -64,9 +64,9 @@ class SSHServer(asyncssh.SSHServer):
     def password_auth_supported(self) -> bool:
         return True
 
-    def validate_password(self, username: str, password: str) -> bool:
+    async def validate_password(self, username: str, password: str) -> bool:
         "True if username/password combo correct or False if not"
-        return game.login(username, password)
+        return await game.login(username, password)
 
 
 async def create_server():
