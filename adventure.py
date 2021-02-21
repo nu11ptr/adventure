@@ -1,18 +1,55 @@
+from typing import Optional
 import asyncio
 import sys
 
 import asyncssh
 
-_USERNAME = "scott"
-_PASSWORD = "password"
+from engine.game import load_game, Player
+
 
 _SSH_KEY = "server_host_key"
 
 
-def client_handler(process: asyncssh.SSHClientProcess):
-    username = process.get_extra_info("username")
-    process.stdout.write(f"Welcome to my text adventure, {username}!\n")
-    process.exit(0)
+class ClientHandler:
+    def __init__(self, process: asyncssh.SSHClientProcess):
+        self._username = process.get_extra_info("username")
+        self._player: Optional[Player] = None
+        self._process = process
+        self._done = False
+
+    async def _input(self):
+        try:
+            async for input_ in self._process.stdin:
+                input_ = input_.rstrip("\n")
+                await self._player.send_input(input_)
+        except asyncssh.BreakReceived:
+            pass
+
+    async def _output(self):
+        while True:
+            output = await self._player.recv_output()
+            self._process.stdout.write(output)
+            self._process.stdout.write("\n")
+
+    async def handle(self):
+        self._player = await game.player(self._username)
+
+        self._process.stdout.write(await game.greeting(self._username))
+
+        _, pending = await asyncio.wait(
+            [self._input(), self._output()], return_when=asyncio.FIRST_COMPLETED
+        )
+
+        for task in pending:
+            task.cancel()
+
+        self._process.stdout.write(await game.goodbye_msg(self._username))
+        self._process.exit(0)
+
+
+async def client_handler(process: asyncssh.SSHClientProcess):
+    handler = ClientHandler(process)
+    await handler.handle()
 
 
 class SSHServer(asyncssh.SSHServer):
@@ -22,14 +59,14 @@ class SSHServer(asyncssh.SSHServer):
 
     def begin_auth(self, username: str) -> bool:
         "True if password is required for the username"
-        return _PASSWORD != ""
+        return True
 
     def password_auth_supported(self) -> bool:
         return True
 
     def validate_password(self, username: str, password: str) -> bool:
         "True if username/password combo correct or False if not"
-        return username == _USERNAME and password == _PASSWORD
+        return game.login(username, password)
 
 
 async def create_server():
@@ -43,6 +80,12 @@ async def create_server():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python adventure.py <game_module>\n")
+        sys.exit(1)
+
+    game = load_game(sys.argv[1])
+
     loop = asyncio.get_event_loop()
 
     try:
@@ -51,3 +94,4 @@ if __name__ == "__main__":
         sys.exit(f"Error starting SSH server: {str(e)}")
 
     loop.run_forever()
+    loop.close()
